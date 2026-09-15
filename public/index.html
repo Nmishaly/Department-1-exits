@@ -11,7 +11,22 @@
 <body>
   <header class="app-header">
     <h1>יציאות מחלקה 1</h1>
+    <button id="logout-btn" class="logout-btn" hidden>יציאה</button>
   </header>
+
+  <!-- מסך התחברות -->
+  <div id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-box">
+      <div class="login-logo">יציאות מחלקה 1</div>
+      <p class="login-sub">כניסת מפקדים</p>
+      <label>
+        סיסמה
+        <input type="password" id="login-password" autocomplete="current-password" required />
+      </label>
+      <p id="login-error" class="form-error" hidden></p>
+      <button type="submit" class="primary-btn">כניסה</button>
+    </form>
+  </div>
 
   <nav class="tabs" role="tablist">
     <button class="tab is-active" data-tab="calendar" role="tab">לוח שנה</button>

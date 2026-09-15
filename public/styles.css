@@ -40,6 +40,10 @@ body { padding-bottom: 40px; }
   top: 0;
   z-index: 20;
   box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: sticky;
 }
 .app-header h1 {
   margin: 0;
@@ -47,6 +51,55 @@ body { padding-bottom: 40px; }
   text-align: center;
   letter-spacing: 0.5px;
 }
+.logout-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.logout-btn:active { background: rgba(255, 255, 255, 0.28); }
+
+/* מסך התחברות */
+.login-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--navy);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-box {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 28px 22px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+.login-logo {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--navy);
+  text-align: center;
+}
+.login-sub {
+  text-align: center;
+  color: var(--muted);
+  margin: 4px 0 20px;
+  font-size: 0.9rem;
+}
+.login-box label { font-weight: 600; font-size: 0.9rem; }
+.login-box .primary-btn { margin-top: 8px; margin-bottom: 0; }
 
 /* לשוניות */
 .tabs {
@@ -269,7 +322,7 @@ main { padding: 16px; max-width: 720px; margin: 0 auto; }
 .modal h3 { margin: 0 0 16px; }
 
 form label { display: block; margin-bottom: 14px; font-size: 0.9rem; font-weight: 600; }
-form select, form input[type="date"], form input[type="text"] {
+form select, form input[type="date"], form input[type="text"], form input[type="password"] {
   width: 100%;
   margin-top: 6px;
   padding: 11px 10px;

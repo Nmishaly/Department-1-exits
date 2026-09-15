@@ -1,14 +1,114 @@
 'use strict';
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 1); // מאחורי פרוקסי (Fly/הוסטינג) - נדרש לעוגיות Secure
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------------------------------------------------------------------------
+// אימות - סיסמה משותפת אחת למפקדים
+// ---------------------------------------------------------------------------
+const APP_PASSWORD = process.env.APP_PASSWORD || 'mahlaka1';
+const SESSION_SECRET =
+  process.env.SESSION_SECRET || 'dev-insecure-secret-change-in-production';
+const COOKIE_NAME = 'auth';
+const MAX_AGE_DAYS = 30;
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+if (IS_PROD) {
+  if (!process.env.APP_PASSWORD) {
+    console.warn('אזהרה: APP_PASSWORD לא הוגדר - נעשה שימוש בסיסמת ברירת המחדל!');
+  }
+  if (!process.env.SESSION_SECRET) {
+    console.warn('אזהרה: SESSION_SECRET לא הוגדר - חובה להגדיר אותו בסביבת פרודקשן!');
+  }
+}
+
+function sign(payload) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+}
+
+function makeToken() {
+  const iat = String(Date.now());
+  return `${iat}.${sign(iat)}`;
+}
+
+function verifyToken(token) {
+  if (typeof token !== 'string') return false;
+  const dot = token.indexOf('.');
+  if (dot < 0) return false;
+  const iat = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = sign(iat);
+  if (sig.length !== expected.length) return false;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
+  const iatNum = Number(iat);
+  if (!Number.isFinite(iatNum)) return false;
+  return Date.now() - iatNum <= MAX_AGE_DAYS * 86400000;
+}
+
+// השוואת סיסמאות בזמן קבוע (מונע דליפת מידע דרך זמני תגובה)
+function passwordMatches(input) {
+  if (typeof input !== 'string') return false;
+  const a = crypto.createHash('sha256').update(input).digest();
+  const b = crypto.createHash('sha256').update(APP_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=');
+    if (i > -1) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+function setAuthCookie(res, token, maxAgeSec) {
+  const parts = [
+    `${COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${maxAgeSec}`,
+  ];
+  if (IS_PROD || process.env.SECURE_COOKIE === '1') parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+app.post('/api/login', (req, res) => {
+  const { password } = req.body || {};
+  if (!passwordMatches(password)) {
+    return res.status(401).json({ error: 'סיסמה שגויה' });
+  }
+  setAuthCookie(res, makeToken(), MAX_AGE_DAYS * 86400);
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  setAuthCookie(res, '', 0);
+  res.json({ ok: true });
+});
+
+app.get('/api/session', (req, res) => {
+  res.json({ authenticated: verifyToken(parseCookies(req)[COOKIE_NAME]) });
+});
+
+// שמירה על כל שאר נתיבי ה-API מאחורי התחברות
+app.use('/api', (req, res, next) => {
+  if (['/login', '/logout', '/session'].includes(req.path)) return next();
+  if (verifyToken(parseCookies(req)[COOKIE_NAME])) return next();
+  return res.status(401).json({ error: 'נדרשת התחברות' });
+});
 
 // ---------------------------------------------------------------------------
 // עזרי תאריכים (כל התאריכים בפורמט YYYY-MM-DD, טווחים כוללים)

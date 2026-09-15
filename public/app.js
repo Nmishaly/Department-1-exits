@@ -31,6 +31,10 @@ async function api(url, opts) {
     ...opts,
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
+  if (res.status === 401) {
+    showLogin();
+    throw new Error((data && data.error) || 'נדרשת התחברות');
+  }
   if (!res.ok) {
     throw new Error((data && data.error) || 'שגיאת שרת');
   }
@@ -448,11 +452,62 @@ $$('.modal-backdrop').forEach((bd) => {
 });
 
 // ---------------------------------------------------------------------------
+// התחברות
+// ---------------------------------------------------------------------------
+function showLogin() {
+  $('#login-screen').hidden = false;
+  $('#logout-btn').hidden = true;
+  const pw = $('#login-password');
+  if (pw) { pw.value = ''; pw.focus(); }
+}
+
+function hideLogin() {
+  $('#login-screen').hidden = true;
+  $('#logout-btn').hidden = false;
+}
+
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = $('#login-error');
+  errEl.hidden = true;
+  const password = $('#login-password').value;
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+    hideLogin();
+    await startApp();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.hidden = false;
+  }
+});
+
+$('#logout-btn').addEventListener('click', async () => {
+  try { await api('/api/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
+  state.soldiers = [];
+  showLogin();
+});
+
+// ---------------------------------------------------------------------------
 // אתחול
 // ---------------------------------------------------------------------------
-(async function init() {
+async function startApp() {
   try {
     state.soldiers = await api('/api/soldiers');
-  } catch (e) { /* יטופל בשליפות הבאות */ }
+  } catch (e) { return; /* אם 401 - מסך ההתחברות כבר מוצג */ }
+  hideLogin();
   loadCalendar();
+}
+
+(async function init() {
+  let session;
+  try {
+    session = await api('/api/session');
+  } catch (e) {
+    session = { authenticated: false };
+  }
+  if (session && session.authenticated) {
+    await startApp();
+  } else {
+    showLogin();
+  }
 })();
