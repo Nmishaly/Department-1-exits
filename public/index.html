@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="theme-color" content="#1f3a5f" />
+  <title>יציאות מחלקה 1</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='12' y='18' width='76' height='70' rx='10' fill='%231f3a5f'/%3E%3Crect x='12' y='18' width='76' height='20' rx='10' fill='%232e9e57'/%3E%3Cpath d='M32 62l12 12 24-26' stroke='%23fff' stroke-width='9' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>יציאות מחלקה 1</h1>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab is-active" data-tab="calendar" role="tab">לוח שנה</button>
+    <button class="tab" data-tab="requests" role="tab">בקשות</button>
+    <button class="tab" data-tab="roster" role="tab">רשימת שמות</button>
+  </nav>
+
+  <main>
+    <!-- לשונית לוח שנה -->
+    <section id="tab-calendar" class="tab-panel is-active">
+      <div class="cal-toolbar">
+        <button id="cal-next" class="nav-btn" aria-label="החודש הבא">‹</button>
+        <h2 id="cal-title">—</h2>
+        <button id="cal-prev" class="nav-btn" aria-label="החודש הקודם">›</button>
+      </div>
+
+      <div class="legend">
+        <span class="legend-item"><span class="dot dot-dept"></span> יציאה מחלקתית</span>
+        <span class="legend-item"><span class="dot dot-approved"></span> יציאה מאושרת</span>
+        <span class="legend-item"><span class="dot dot-pending"></span> בטיפול</span>
+      </div>
+
+      <div class="cal-weekdays">
+        <div>א׳</div><div>ב׳</div><div>ג׳</div><div>ד׳</div><div>ה׳</div><div>ו׳</div><div>ש׳</div>
+      </div>
+      <div id="cal-grid" class="cal-grid"></div>
+    </section>
+
+    <!-- לשונית בקשות -->
+    <section id="tab-requests" class="tab-panel">
+      <button id="add-request-btn" class="primary-btn">＋ בקשת יציאה חדשה</button>
+
+      <div class="req-group">
+        <h3 class="group-title status-pending">בקשות בטיפול</h3>
+        <div id="list-pending" class="req-list"></div>
+      </div>
+      <div class="req-group">
+        <h3 class="group-title status-approved">יציאות מאושרות</h3>
+        <div id="list-approved" class="req-list"></div>
+      </div>
+      <div class="req-group">
+        <h3 class="group-title status-rejected">בקשות שלא אושרו</h3>
+        <div id="list-rejected" class="req-list"></div>
+      </div>
+    </section>
+
+    <!-- לשונית רשימת שמות -->
+    <section id="tab-roster" class="tab-panel">
+      <p class="hint">רשימה ממוינת לפי שם משפחה. "ימי יציאה" = סך ימי היציאה האישית שאושרו.</p>
+      <div id="roster-list" class="roster-list"></div>
+    </section>
+  </main>
+
+  <!-- מודאל הוספת/עריכת בקשה -->
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h3 id="modal-title">בקשת יציאה חדשה</h3>
+      <form id="request-form">
+        <label>
+          חייל
+          <select id="f-soldier" required></select>
+        </label>
+
+        <div class="mode-toggle">
+          <label><input type="radio" name="mode" value="single" checked /> יום בודד</label>
+          <label><input type="radio" name="mode" value="range" /> טווח ימים</label>
+        </div>
+
+        <label>
+          <span id="f-start-label">תאריך</span>
+          <input type="date" id="f-start" required />
+        </label>
+        <label id="f-end-wrap" hidden>
+          עד תאריך
+          <input type="date" id="f-end" />
+        </label>
+
+        <label>
+          הערה (רשות)
+          <input type="text" id="f-note" maxlength="120" placeholder="סיבה / פירוט" />
+        </label>
+
+        <p id="form-error" class="form-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel" class="ghost-btn">ביטול</button>
+          <button type="submit" class="primary-btn">שמירה</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- מודאל סיכום יום -->
+  <div id="day-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="day-title">
+      <h3 id="day-title">—</h3>
+      <div id="day-summary" class="day-summary"></div>
+      <div id="day-requests" class="day-requests"></div>
+      <div class="modal-actions">
+        <button type="button" id="day-add" class="primary-btn">＋ הוספת בקשה ליום זה</button>
+        <button type="button" id="day-close" class="ghost-btn">סגירה</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
