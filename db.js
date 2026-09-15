@@ -1,48 +1,23 @@
 'use strict';
 
-const path = require('path');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
-const db = new Database(DB_PATH);
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error('שגיאה: משתנה הסביבה DATABASE_URL אינו מוגדר. ראה .env.example / DEPLOY.md');
+  process.exit(1);
+}
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-// ---------------------------------------------------------------------------
-// סכימה
-// ---------------------------------------------------------------------------
-db.exec(`
-  CREATE TABLE IF NOT EXISTS soldiers (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    first_name  TEXT NOT NULL,
-    last_name   TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS requests (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    soldier_id  INTEGER NOT NULL,
-    start_date  TEXT NOT NULL,          -- YYYY-MM-DD
-    end_date    TEXT NOT NULL,          -- YYYY-MM-DD (כולל)
-    status      TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
-    note        TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (soldier_id) REFERENCES soldiers(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS department_exits (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    start_date  TEXT NOT NULL,
-    end_date    TEXT NOT NULL,
-    label       TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_requests_dates ON requests(start_date, end_date);
-  CREATE INDEX IF NOT EXISTS idx_requests_soldier ON requests(soldier_id);
-`);
+// חיבור מקומי לא דורש SSL; חיבור מרוחק (Neon וכד') דורש SSL
+const isLocal = /(^|@)(localhost|127\.0\.0\.1)/.test(connectionString);
+const pool = new Pool({
+  connectionString,
+  ssl: isLocal ? false : { rejectUnauthorized: false },
+  max: 5,
+});
 
 // ---------------------------------------------------------------------------
-// נתוני זריעה (seed) - רצים פעם אחת בלבד, בהתבסס על טבלה ריקה
+// נתוני זריעה (seed)
 // ---------------------------------------------------------------------------
 
 // רשימת החיילים (שם פרטי / שם משפחה). המספרים המקוריים הוסרו בכוונה,
@@ -91,26 +66,74 @@ const DEPARTMENT_EXITS = [
   ['2026-12-03', '2026-12-03', 'סיום תעסוקה'],
 ];
 
-const soldierCount = db.prepare('SELECT COUNT(*) AS c FROM soldiers').get().c;
-if (soldierCount === 0) {
-  const insertSoldier = db.prepare(
-    'INSERT INTO soldiers (first_name, last_name) VALUES (?, ?)'
-  );
-  const seedSoldiers = db.transaction((rows) => {
-    for (const [first, last] of rows) insertSoldier.run(first, last);
-  });
-  seedSoldiers(SOLDIERS);
+// ---------------------------------------------------------------------------
+// אתחול הסכימה + זריעה (idempotent - בטוח להריץ בכל עלייה)
+// ---------------------------------------------------------------------------
+async function init() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS soldiers (
+      id          SERIAL PRIMARY KEY,
+      first_name  TEXT NOT NULL,
+      last_name   TEXT NOT NULL
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS requests (
+      id          SERIAL PRIMARY KEY,
+      soldier_id  INTEGER NOT NULL REFERENCES soldiers(id) ON DELETE CASCADE,
+      start_date  TEXT NOT NULL,
+      end_date    TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      note        TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS department_exits (
+      id          SERIAL PRIMARY KEY,
+      start_date  TEXT NOT NULL,
+      end_date    TEXT NOT NULL,
+      label       TEXT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_requests_dates ON requests(start_date, end_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_requests_soldier ON requests(soldier_id);`);
+
+  // זריעת חיילים (רק אם הטבלה ריקה)
+  const soldierCount = Number((await pool.query('SELECT COUNT(*) AS c FROM soldiers')).rows[0].c);
+  if (soldierCount === 0) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [first, last] of SOLDIERS) {
+        await client.query('INSERT INTO soldiers (first_name, last_name) VALUES ($1, $2)', [first, last]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  // זריעת יציאות מחלקתיות (רק אם הטבלה ריקה)
+  const deptCount = Number((await pool.query('SELECT COUNT(*) AS c FROM department_exits')).rows[0].c);
+  if (deptCount === 0) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [s, e, l] of DEPARTMENT_EXITS) {
+        await client.query('INSERT INTO department_exits (start_date, end_date, label) VALUES ($1, $2, $3)', [s, e, l]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
 }
 
-const deptCount = db.prepare('SELECT COUNT(*) AS c FROM department_exits').get().c;
-if (deptCount === 0) {
-  const insertDept = db.prepare(
-    'INSERT INTO department_exits (start_date, end_date, label) VALUES (?, ?, ?)'
-  );
-  const seedDept = db.transaction((rows) => {
-    for (const [s, e, l] of rows) insertDept.run(s, e, l);
-  });
-  seedDept(DEPARTMENT_EXITS);
-}
-
-module.exports = db;
+module.exports = { pool, init };

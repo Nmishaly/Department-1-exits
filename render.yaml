@@ -1,0 +1,25 @@
+# Blueprint לפריסה אוטומטית ב-Render.
+# ב-Render בוחרים: New + -> Blueprint, מחברים את המאגר, ו-Render קורא קובץ זה.
+# ראה מדריך מלא (מותאם לנייד) בקובץ DEPLOY.md.
+
+services:
+  - type: web
+    name: yetziot-mahlaka-1
+    runtime: node
+    plan: free
+    # ה-branch שממנו לפרוס. אם תמזג ל-main, שנה כאן (או בהגדרות Render) ל-main.
+    branch: claude/soldier-leave-tracking-app-3mgwy3
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # הסיסמה המשותפת למפקדים - מזינים ידנית בממשק של Render
+      - key: APP_PASSWORD
+        sync: false
+      # מפתח סודי לחתימת עוגיות - Render יוצר ערך אקראי אוטומטית
+      - key: SESSION_SECRET
+        generateValue: true
+      # כתובת בסיס הנתונים של Neon - מדביקים ידנית בממשק של Render
+      - key: DATABASE_URL
+        sync: false

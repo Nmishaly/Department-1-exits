@@ -3,11 +3,11 @@
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const db = require('./db');
+const { pool, init } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.set('trust proxy', 1); // מאחורי פרוקסי (Fly/הוסטינג) - נדרש לעוגיות Secure
+app.set('trust proxy', 1); // מאחורי פרוקסי (Render/הוסטינג) - נדרש לעוגיות Secure
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -111,6 +111,16 @@ app.use('/api', (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// גישה לנתונים (PostgreSQL)
+// ---------------------------------------------------------------------------
+async function all(text, params) {
+  return (await pool.query(text, params)).rows;
+}
+async function one(text, params) {
+  return (await pool.query(text, params)).rows[0] || null;
+}
+
+// ---------------------------------------------------------------------------
 // עזרי תאריכים (כל התאריכים בפורמט YYYY-MM-DD, טווחים כוללים)
 // ---------------------------------------------------------------------------
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -140,46 +150,6 @@ function datesInRange(start, end) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// שאילתות מוכנות
-// ---------------------------------------------------------------------------
-const q = {
-  soldiers: db.prepare(
-    `SELECT id, first_name, last_name FROM soldiers`
-  ),
-  soldierById: db.prepare(`SELECT id, first_name, last_name FROM soldiers WHERE id = ?`),
-  approvedBySoldier: db.prepare(
-    `SELECT start_date, end_date FROM requests
-     WHERE soldier_id = ? AND status = 'approved'`
-  ),
-  allRequests: db.prepare(
-    `SELECT r.*, s.first_name, s.last_name
-     FROM requests r JOIN soldiers s ON s.id = r.soldier_id`
-  ),
-  requestsOnDate: db.prepare(
-    `SELECT r.*, s.first_name, s.last_name
-     FROM requests r JOIN soldiers s ON s.id = r.soldier_id
-     WHERE r.start_date <= ? AND r.end_date >= ?`
-  ),
-  requestsInSpan: db.prepare(
-    `SELECT r.*, s.first_name, s.last_name
-     FROM requests r JOIN soldiers s ON s.id = r.soldier_id
-     WHERE r.start_date <= ? AND r.end_date >= ?`
-  ),
-  requestById: db.prepare(`SELECT * FROM requests WHERE id = ?`),
-  insertRequest: db.prepare(
-    `INSERT INTO requests (soldier_id, start_date, end_date, status, note)
-     VALUES (?, ?, ?, 'pending', ?)`
-  ),
-  updateStatus: db.prepare(`UPDATE requests SET status = ? WHERE id = ?`),
-  deleteRequest: db.prepare(`DELETE FROM requests WHERE id = ?`),
-  deptExits: db.prepare(`SELECT id, start_date, end_date, label FROM department_exits ORDER BY start_date`),
-  deptOnDate: db.prepare(
-    `SELECT id, start_date, end_date, label FROM department_exits
-     WHERE start_date <= ? AND end_date >= ?`
-  ),
-};
-
 // מיון לפי שם משפחה (עברית), ואז שם פרטי
 const heCollator = new Intl.Collator('he');
 function sortByLastName(list) {
@@ -193,51 +163,6 @@ function sortByLastName(list) {
 function fullName(s) {
   return `${s.first_name} ${s.last_name}`;
 }
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-
-// רשימת החיילים (ממוינת לפי שם משפחה) + סך ימי היציאה האישית שאושרו לכל חייל
-app.get('/api/soldiers', (req, res) => {
-  const soldiers = sortByLastName(q.soldiers.all());
-  const result = soldiers.map((s) => {
-    const approved = q.approvedBySoldier.all(s.id);
-    const days = new Set();
-    for (const r of approved) {
-      for (const d of datesInRange(r.start_date, r.end_date)) days.add(d);
-    }
-    return {
-      id: s.id,
-      first_name: s.first_name,
-      last_name: s.last_name,
-      full_name: fullName(s),
-      days_out: days.size,
-    };
-  });
-  res.json(result);
-});
-
-// כל היציאות המחלקתיות
-app.get('/api/department-exits', (req, res) => {
-  res.json(q.deptExits.all());
-});
-
-// כל הבקשות, ממוינות: מחלקה קודם לפי שם משפחה ואז לפי תאריך
-app.get('/api/requests', (req, res) => {
-  const { status, date } = req.query;
-  let rows = date && isValidDate(date)
-    ? q.requestsOnDate.all(date, date)
-    : q.allRequests.all();
-  if (status) rows = rows.filter((r) => r.status === status);
-  rows = rows.map(enrichRequest);
-  rows.sort((a, b) => {
-    const byLast = heCollator.compare(a.last_name, b.last_name);
-    if (byLast !== 0) return byLast;
-    return a.start_date.localeCompare(b.start_date);
-  });
-  res.json(rows);
-});
 
 function enrichRequest(r) {
   return {
@@ -255,8 +180,82 @@ function enrichRequest(r) {
   };
 }
 
+async function countSoldiers() {
+  return Number((await one('SELECT COUNT(*) AS c FROM soldiers')).c);
+}
+
+// עוטף route אסינכרוני ומחזיר 500 בשגיאת שרת
+function wrap(handler) {
+  return (req, res) => {
+    handler(req, res).catch((err) => {
+      console.error('שגיאת שרת:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'שגיאת שרת' });
+    });
+  };
+}
+
+// ---------------------------------------------------------------------------
+// API
+// ---------------------------------------------------------------------------
+
+// רשימת החיילים (ממוינת לפי שם משפחה) + סך ימי היציאה האישית שאושרו לכל חייל
+app.get('/api/soldiers', wrap(async (req, res) => {
+  const soldiers = sortByLastName(await all('SELECT id, first_name, last_name FROM soldiers'));
+  const result = [];
+  for (const s of soldiers) {
+    const approved = await all(
+      `SELECT start_date, end_date FROM requests WHERE soldier_id = $1 AND status = 'approved'`,
+      [s.id]
+    );
+    const days = new Set();
+    for (const r of approved) {
+      for (const d of datesInRange(r.start_date, r.end_date)) days.add(d);
+    }
+    result.push({
+      id: s.id,
+      first_name: s.first_name,
+      last_name: s.last_name,
+      full_name: fullName(s),
+      days_out: days.size,
+    });
+  }
+  res.json(result);
+}));
+
+// כל היציאות המחלקתיות
+app.get('/api/department-exits', wrap(async (req, res) => {
+  res.json(await all('SELECT id, start_date, end_date, label FROM department_exits ORDER BY start_date'));
+}));
+
+// כל הבקשות, ממוינות: לפי שם משפחה ואז לפי תאריך
+app.get('/api/requests', wrap(async (req, res) => {
+  const { status, date } = req.query;
+  let rows;
+  if (date && isValidDate(date)) {
+    rows = await all(
+      `SELECT r.*, s.first_name, s.last_name
+       FROM requests r JOIN soldiers s ON s.id = r.soldier_id
+       WHERE r.start_date <= $1 AND r.end_date >= $1`,
+      [date]
+    );
+  } else {
+    rows = await all(
+      `SELECT r.*, s.first_name, s.last_name
+       FROM requests r JOIN soldiers s ON s.id = r.soldier_id`
+    );
+  }
+  if (status) rows = rows.filter((r) => r.status === status);
+  rows = rows.map(enrichRequest);
+  rows.sort((a, b) => {
+    const byLast = heCollator.compare(a.last_name, b.last_name);
+    if (byLast !== 0) return byLast;
+    return a.start_date.localeCompare(b.start_date);
+  });
+  res.json(rows);
+}));
+
 // יצירת בקשת יציאה (יום בודד או טווח). נוצרת תמיד כ"בטיפול"
-app.post('/api/requests', (req, res) => {
+app.post('/api/requests', wrap(async (req, res) => {
   const { soldier_id, start_date } = req.body || {};
   let { end_date, note } = req.body || {};
   if (!end_date) end_date = start_date;
@@ -264,7 +263,8 @@ app.post('/api/requests', (req, res) => {
   if (!Number.isInteger(soldier_id)) {
     return res.status(400).json({ error: 'חסר מזהה חייל תקין' });
   }
-  if (!q.soldierById.get(soldier_id)) {
+  const soldier = await one('SELECT id, first_name, last_name FROM soldiers WHERE id = $1', [soldier_id]);
+  if (!soldier) {
     return res.status(404).json({ error: 'חייל לא נמצא' });
   }
   if (!isValidDate(start_date) || !isValidDate(end_date)) {
@@ -274,65 +274,67 @@ app.post('/api/requests', (req, res) => {
     return res.status(400).json({ error: 'תאריך הסיום מוקדם מתאריך ההתחלה' });
   }
 
-  const info = q.insertRequest.run(
-    soldier_id,
-    start_date,
-    end_date,
-    typeof note === 'string' ? note.trim() : null
+  const created = await one(
+    `INSERT INTO requests (soldier_id, start_date, end_date, status, note)
+     VALUES ($1, $2, $3, 'pending', $4) RETURNING *`,
+    [soldier_id, start_date, end_date, typeof note === 'string' ? note.trim() : null]
   );
-  const created = q.requestById.get(info.lastInsertRowid);
-  const soldier = q.soldierById.get(soldier_id);
-  const enriched = enrichRequest({
+  res.status(201).json(enrichRequest({
     ...created,
     first_name: soldier.first_name,
     last_name: soldier.last_name,
-  });
-  res.status(201).json(enriched);
-});
+  }));
+}));
 
 // שינוי סטטוס בקשה (אישור / דחייה / חזרה לטיפול) - חל על כל הטווח
-app.patch('/api/requests/:id', (req, res) => {
+app.patch('/api/requests/:id', wrap(async (req, res) => {
   const id = Number(req.params.id);
   const { status } = req.body || {};
   const valid = ['pending', 'approved', 'rejected'];
   if (!valid.includes(status)) {
     return res.status(400).json({ error: 'סטטוס לא תקין' });
   }
-  const existing = q.requestById.get(id);
+  const existing = await one('SELECT * FROM requests WHERE id = $1', [id]);
   if (!existing) return res.status(404).json({ error: 'בקשה לא נמצאה' });
-  q.updateStatus.run(status, id);
-  const updated = q.requestById.get(id);
-  const soldier = q.soldierById.get(updated.soldier_id);
+  const updated = await one('UPDATE requests SET status = $1 WHERE id = $2 RETURNING *', [status, id]);
+  const soldier = await one('SELECT first_name, last_name FROM soldiers WHERE id = $1', [updated.soldier_id]);
   res.json(enrichRequest({
     ...updated,
     first_name: soldier.first_name,
     last_name: soldier.last_name,
   }));
-});
+}));
 
 // מחיקת בקשה - חל על כל הטווח
-app.delete('/api/requests/:id', (req, res) => {
+app.delete('/api/requests/:id', wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const existing = q.requestById.get(id);
+  const existing = await one('SELECT id FROM requests WHERE id = $1', [id]);
   if (!existing) return res.status(404).json({ error: 'בקשה לא נמצאה' });
-  q.deleteRequest.run(id);
+  await pool.query('DELETE FROM requests WHERE id = $1', [id]);
   res.json({ ok: true });
-});
+}));
 
 // סיכום יום מסוים: מי בחוץ, כמה נשארים, האם יציאה מחלקתית
-app.get('/api/day/:date', (req, res) => {
+app.get('/api/day/:date', wrap(async (req, res) => {
   const { date } = req.params;
   if (!isValidDate(date)) {
     return res.status(400).json({ error: 'תאריך לא תקין' });
   }
-  const totalSoldiers = q.soldiers.all().length;
-  const dept = q.deptOnDate.all(date, date);
+  const totalSoldiers = await countSoldiers();
+  const dept = await all(
+    'SELECT id, start_date, end_date, label FROM department_exits WHERE start_date <= $1 AND end_date >= $1',
+    [date]
+  );
   const isDeptExit = dept.length > 0;
 
-  const requests = q.requestsOnDate.all(date, date).map(enrichRequest);
+  const requests = (await all(
+    `SELECT r.*, s.first_name, s.last_name
+     FROM requests r JOIN soldiers s ON s.id = r.soldier_id
+     WHERE r.start_date <= $1 AND r.end_date >= $1`,
+    [date]
+  )).map(enrichRequest);
   requests.sort((a, b) => heCollator.compare(a.last_name, b.last_name));
 
-  // חיילים בחוץ = יציאה אישית שאושרה ליום זה (או כל המחלקה ביום יציאה מחלקתית)
   const approvedIds = new Set(
     requests.filter((r) => r.status === 'approved').map((r) => r.soldier_id)
   );
@@ -356,10 +358,10 @@ app.get('/api/day/:date', (req, res) => {
     department_labels: dept.map((d) => d.label).filter(Boolean),
     requests,
   });
-});
+}));
 
 // נתוני חודש עבור לוח השנה: לכל יום סוג/מונים
-app.get('/api/calendar', (req, res) => {
+app.get('/api/calendar', wrap(async (req, res) => {
   const month = req.query.month; // YYYY-MM
   if (typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: 'פרמטר month נדרש בפורמט YYYY-MM' });
@@ -368,11 +370,16 @@ app.get('/api/calendar', (req, res) => {
   const firstDay = `${month}-01`;
   const lastDayNum = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const lastDay = `${month}-${String(lastDayNum).padStart(2, '0')}`;
-  const totalSoldiers = q.soldiers.all().length;
+  const totalSoldiers = await countSoldiers();
 
   // בקשות שנוגעות בחודש זה
-  const monthRequests = q.requestsInSpan.all(lastDay, firstDay).map(enrichRequest);
-  const deptRanges = q.deptExits.all();
+  const monthRequests = (await all(
+    `SELECT r.*, s.first_name, s.last_name
+     FROM requests r JOIN soldiers s ON s.id = r.soldier_id
+     WHERE r.start_date <= $1 AND r.end_date >= $2`,
+    [lastDay, firstDay]
+  )).map(enrichRequest);
+  const deptRanges = await all('SELECT id, start_date, end_date, label FROM department_exits ORDER BY start_date');
 
   const days = {};
   for (let d = 1; d <= lastDayNum; d++) {
@@ -419,13 +426,21 @@ app.get('/api/calendar', (req, res) => {
   }
 
   res.json({ month, total: totalSoldiers, days: Object.values(days) });
-});
+}));
 
 // דף הבית
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`יציאות מחלקה 1 - השרת פועל על http://localhost:${PORT}`);
-});
+// אתחול בסיס הנתונים ואז הפעלת השרת
+init()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`יציאות מחלקה 1 - השרת פועל על http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('כשל באתחול בסיס הנתונים:', err);
+    process.exit(1);
+  });
