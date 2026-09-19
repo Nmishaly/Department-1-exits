@@ -337,18 +337,112 @@ async function loadRoster() {
     const row = document.createElement('div');
     row.className = 'roster-row';
 
+    // בניית השם עם textContent (בטוח מפני HTML בשמות שהוזנו ידנית)
     const name = document.createElement('div');
     name.className = 'roster-name';
-    name.innerHTML = `${s.last_name} <span class="first">${s.first_name}</span>`;
+    name.appendChild(document.createTextNode(s.last_name + ' '));
+    const first = document.createElement('span');
+    first.className = 'first';
+    first.textContent = s.first_name;
+    name.appendChild(first);
     row.appendChild(name);
+
+    const right = document.createElement('div');
+    right.className = 'roster-right';
 
     const days = document.createElement('div');
     days.className = 'roster-days' + (s.days_out === 0 ? ' zero' : '');
     days.textContent = s.days_out === 1 ? 'יום 1' : `${s.days_out} ימים`;
-    row.appendChild(days);
+    right.appendChild(days);
 
+    const edit = document.createElement('button');
+    edit.className = 'roster-act edit';
+    edit.title = 'עריכת שם';
+    edit.setAttribute('aria-label', `עריכת השם של ${s.full_name}`);
+    edit.textContent = '✎';
+    edit.addEventListener('click', () => openSoldierModal(s));
+    right.appendChild(edit);
+
+    const del = document.createElement('button');
+    del.className = 'roster-act delete';
+    del.title = 'הסרת חייל';
+    del.setAttribute('aria-label', `הסרת ${s.full_name}`);
+    del.textContent = '🗑';
+    del.addEventListener('click', () => deleteSoldier(s));
+    right.appendChild(del);
+
+    row.appendChild(right);
     wrap.appendChild(row);
   });
+}
+
+// ---------------------------------------------------------------------------
+// הוספה / עריכה / הסרה של חיילים
+// ---------------------------------------------------------------------------
+let editingSoldierId = null;
+
+function openSoldierModal(soldier) {
+  editingSoldierId = soldier ? soldier.id : null;
+  $('#soldier-title').textContent = soldier ? 'עריכת שם חייל' : 'הוספת חייל';
+  $('#s-first').value = soldier ? soldier.first_name : '';
+  $('#s-last').value = soldier ? soldier.last_name : '';
+  $('#soldier-error').hidden = true;
+  $('#soldier-backdrop').hidden = false;
+  $('#s-first').focus();
+}
+
+$('#add-soldier-btn').addEventListener('click', () => openSoldierModal(null));
+$('#soldier-cancel').addEventListener('click', () => { $('#soldier-backdrop').hidden = true; });
+
+$('#soldier-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = $('#soldier-error');
+  errEl.hidden = true;
+
+  const first_name = $('#s-first').value.trim();
+  const last_name = $('#s-last').value.trim();
+  if (!first_name || !last_name) {
+    errEl.textContent = 'יש להזין שם פרטי ושם משפחה';
+    errEl.hidden = false;
+    return;
+  }
+
+  try {
+    if (editingSoldierId) {
+      await api(`/api/soldiers/${editingSoldierId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ first_name, last_name }),
+      });
+      toast('שם החייל עודכן');
+    } else {
+      await api('/api/soldiers', {
+        method: 'POST',
+        body: JSON.stringify({ first_name, last_name }),
+      });
+      toast('החייל נוסף לרשימה');
+    }
+    $('#soldier-backdrop').hidden = true;
+    state.soldiers = []; // ניקוי מטמון כדי לשמור סנכרון (טופס בקשה, לוח שנה)
+    await loadRoster();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.hidden = false;
+  }
+});
+
+async function deleteSoldier(s) {
+  const extra = s.requests_count > 0
+    ? `\n\nשים לב: פעולה זו תמחק גם ${s.requests_count} בקשות/יציאות המשויכות לחייל.`
+    : '';
+  if (!confirm(`להסיר את ${s.full_name} מהרשימה?${extra}`)) return;
+  try {
+    const res = await api(`/api/soldiers/${s.id}`, { method: 'DELETE' });
+    toast(res && res.deleted_requests
+      ? `החייל הוסר (נמחקו גם ${res.deleted_requests} בקשות)`
+      : 'החייל הוסר מהרשימה');
+    state.soldiers = []; // ניקוי מטמון כדי לשמור סנכרון
+    await loadRoster();
+  } catch (e) { toast(e.message); }
 }
 
 // ---------------------------------------------------------------------------

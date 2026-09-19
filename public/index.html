@@ -75,6 +75,7 @@
 
     <!-- לשונית רשימת שמות -->
     <section id="tab-roster" class="tab-panel">
+      <button id="add-soldier-btn" class="primary-btn">＋ הוספת חייל</button>
       <p class="hint">רשימה ממוינת לפי שם משפחה. "ימי יציאה" = סך ימי היציאה האישית שאושרו.</p>
       <div id="roster-list" class="roster-list"></div>
     </section>
@@ -113,6 +114,30 @@
 
         <div class="modal-actions">
           <button type="button" id="modal-cancel" class="ghost-btn">ביטול</button>
+          <button type="submit" class="primary-btn">שמירה</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- מודאל הוספת/עריכת חייל -->
+  <div id="soldier-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="soldier-title">
+      <h3 id="soldier-title">הוספת חייל</h3>
+      <form id="soldier-form">
+        <label>
+          שם פרטי
+          <input type="text" id="s-first" maxlength="60" autocomplete="off" required />
+        </label>
+        <label>
+          שם משפחה
+          <input type="text" id="s-last" maxlength="60" autocomplete="off" required />
+        </label>
+
+        <p id="soldier-error" class="form-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" id="soldier-cancel" class="ghost-btn">ביטול</button>
           <button type="submit" class="primary-btn">שמירה</button>
         </div>
       </form>
