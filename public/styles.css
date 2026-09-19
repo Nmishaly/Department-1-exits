@@ -287,6 +287,7 @@ main { padding: 16px; max-width: 720px; margin: 0 auto; }
 }
 .roster-name { font-weight: 600; }
 .roster-name .first { color: var(--muted); font-weight: 400; }
+.roster-right { display: flex; align-items: center; gap: 8px; }
 .roster-days {
   background: var(--navy);
   color: #fff;
@@ -296,6 +297,20 @@ main { padding: 16px; max-width: 720px; margin: 0 auto; }
   white-space: nowrap;
 }
 .roster-days.zero { background: #e6eaef; color: var(--muted); }
+.roster-act {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+}
+.roster-act:active { background: #eef2f7; }
+.roster-act.delete { color: var(--red); border-color: #f0c9c5; }
 
 /* מודאל */
 .modal-backdrop {

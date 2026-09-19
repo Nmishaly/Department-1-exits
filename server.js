@@ -164,6 +164,12 @@ function fullName(s) {
   return `${s.first_name} ${s.last_name}`;
 }
 
+// ניקוי שם: מסיר רווחים עודפים בקצוות ובאמצע (שומר על שמות מרובי-מילים)
+const MAX_NAME_LEN = 60;
+function cleanName(v) {
+  return typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '';
+}
+
 function enrichRequest(r) {
   return {
     id: r.id,
@@ -211,15 +217,87 @@ app.get('/api/soldiers', wrap(async (req, res) => {
     for (const r of approved) {
       for (const d of datesInRange(r.start_date, r.end_date)) days.add(d);
     }
+    const requestsCount = Number(
+      (await one('SELECT COUNT(*) AS c FROM requests WHERE soldier_id = $1', [s.id])).c
+    );
     result.push({
       id: s.id,
       first_name: s.first_name,
       last_name: s.last_name,
       full_name: fullName(s),
       days_out: days.size,
+      requests_count: requestsCount,
     });
   }
   res.json(result);
+}));
+
+// הוספת חייל חדש לרשימה (לא נוגע בחיילים או בבקשות קיימות)
+app.post('/api/soldiers', wrap(async (req, res) => {
+  const first_name = cleanName((req.body || {}).first_name);
+  const last_name = cleanName((req.body || {}).last_name);
+  if (!first_name || !last_name) {
+    return res.status(400).json({ error: 'יש להזין שם פרטי ושם משפחה' });
+  }
+  if (first_name.length > MAX_NAME_LEN || last_name.length > MAX_NAME_LEN) {
+    return res.status(400).json({ error: 'שם ארוך מדי' });
+  }
+  const created = await one(
+    'INSERT INTO soldiers (first_name, last_name) VALUES ($1, $2) RETURNING id, first_name, last_name',
+    [first_name, last_name]
+  );
+  res.status(201).json({
+    id: created.id,
+    first_name: created.first_name,
+    last_name: created.last_name,
+    full_name: fullName(created),
+    days_out: 0,
+    requests_count: 0,
+  });
+}));
+
+// עריכת שם חייל (מזהה החייל נשמר, ולכן כל הבקשות המשויכות אליו נשמרות)
+app.patch('/api/soldiers/:id', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    return res.status(400).json({ error: 'מזהה חייל לא תקין' });
+  }
+  const existing = await one('SELECT id FROM soldiers WHERE id = $1', [id]);
+  if (!existing) return res.status(404).json({ error: 'חייל לא נמצא' });
+  const first_name = cleanName((req.body || {}).first_name);
+  const last_name = cleanName((req.body || {}).last_name);
+  if (!first_name || !last_name) {
+    return res.status(400).json({ error: 'יש להזין שם פרטי ושם משפחה' });
+  }
+  if (first_name.length > MAX_NAME_LEN || last_name.length > MAX_NAME_LEN) {
+    return res.status(400).json({ error: 'שם ארוך מדי' });
+  }
+  const updated = await one(
+    'UPDATE soldiers SET first_name = $1, last_name = $2 WHERE id = $3 RETURNING id, first_name, last_name',
+    [first_name, last_name, id]
+  );
+  res.json({
+    id: updated.id,
+    first_name: updated.first_name,
+    last_name: updated.last_name,
+    full_name: fullName(updated),
+  });
+}));
+
+// הסרת חייל מהרשימה. בשל ON DELETE CASCADE, נמחקות גם כל בקשותיו -
+// מספר הבקשות שנמחקו מוחזר כדי שהלקוח יוכל להציג משוב מדויק.
+app.delete('/api/soldiers/:id', wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    return res.status(400).json({ error: 'מזהה חייל לא תקין' });
+  }
+  const existing = await one('SELECT id FROM soldiers WHERE id = $1', [id]);
+  if (!existing) return res.status(404).json({ error: 'חייל לא נמצא' });
+  const deletedRequests = Number(
+    (await one('SELECT COUNT(*) AS c FROM requests WHERE soldier_id = $1', [id])).c
+  );
+  await pool.query('DELETE FROM soldiers WHERE id = $1', [id]);
+  res.json({ ok: true, deleted_requests: deletedRequests });
 }));
 
 // כל היציאות המחלקתיות
